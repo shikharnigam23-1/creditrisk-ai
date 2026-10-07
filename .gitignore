@@ -1,7 +1,13 @@
-.venv/
+# Secrets - NEVER commit
+.streamlit/secrets.toml
+.env
+
+# Python clutter
 __pycache__/
 *.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Mac clutter
 .DS_Store
-.env
-.streamlit/secrets.toml
-.streamlit/secrets.toml
