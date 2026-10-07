@@ -26,6 +26,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Build the complete path to the CSV dataset.
 DATA_PATH = PROJECT_ROOT / "data" / "credit_risk_dataset.csv"
 
+# Settings used for the train-test split (kept fixed so results are reproducible).
+TEST_SIZE = 0.20
+RANDOM_STATE = 42
+
 
 # ---------------------------------------------------------
 # 2. Load the dataset
@@ -49,13 +53,20 @@ def load_data():
 def clean_data(df):
     """
     Remove clearly invalid age and employment-length values.
+    Rows with MISSING employment length are kept; they are
+    filled later by the median imputer in the pipeline.
     """
 
     # Remove records where age is greater than 100.
     df = df[df["person_age"] <= 100].copy()
 
-    # Remove records where employment length is greater than 60 years.
-    df = df[df["person_emp_length"] <= 60].copy()
+    # Remove records where employment length is greater than 60 years,
+    # but keep rows where employment length is missing (NaN).
+    # Note: in pandas, NaN <= 60 is False, so without .isna()
+    # these rows would be silently deleted.
+    df = df[
+        df["person_emp_length"].isna() | (df["person_emp_length"] <= 60)
+    ].copy()
 
     return df
 
@@ -69,7 +80,7 @@ def split_features_target(df):
     Separate the input features from the target variable.
     """
 
-    # loan_status is the target we want to predict.
+    # loan_status is the target we want to predict (1 = default, 0 = repaid).
     X = df.drop(columns=["loan_status"])
 
     # y contains the target variable.
@@ -87,10 +98,8 @@ def create_preprocessor(X):
     Create preprocessing pipelines for numeric and categorical columns.
     """
 
-    # Identify numeric columns automatically.
-    numeric_features = X.select_dtypes(
-        include=["int64", "float64"]
-    ).columns.tolist()
+    # Identify numeric columns automatically (all number types).
+    numeric_features = X.select_dtypes(include="number").columns.tolist()
 
     # Identify categorical columns automatically.
     categorical_features = X.select_dtypes(
@@ -99,7 +108,7 @@ def create_preprocessor(X):
 
     # Numeric preprocessing:
     # 1. Replace missing values with the median.
-    # 2. Standardize the numeric values.
+    # 2. Standardize the numeric values (mean 0, standard deviation 1).
     numeric_pipeline = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
@@ -135,7 +144,42 @@ def create_preprocessor(X):
 
 
 # ---------------------------------------------------------
-# 6. Main execution
+# 6. Helper functions used by model.py and app.py
+# ---------------------------------------------------------
+
+def get_data():
+    """
+    Load -> clean -> split.
+    Returns X_train, X_test, y_train, y_test.
+    The same random_state is used every time, so the test set never changes.
+    """
+
+    df = clean_data(load_data())
+    X, y = split_features_target(df)
+
+    # Stratified 80/20 split: keeps the default rate (~22%)
+    # the same in both the training and the test set.
+    return train_test_split(
+        X,
+        y,
+        test_size=TEST_SIZE,
+        random_state=RANDOM_STATE,
+        stratify=y,
+    )
+
+
+def build_preprocessor():
+    """
+    Return a NEW, unfitted preprocessor.
+    Each model gets its own fresh copy, so nothing leaks between models.
+    """
+
+    X_train, _, _, _ = get_data()
+    return create_preprocessor(X_train)
+
+
+# ---------------------------------------------------------
+# 7. Main execution (quick check that everything works)
 # ---------------------------------------------------------
 
 def main():
@@ -145,38 +189,31 @@ def main():
 
     # Load the raw dataset.
     df = load_data()
-
     print(f"Original dataset shape: {df.shape}")
 
     # Clean invalid outlier values.
-    df = clean_data(df)
+    cleaned = clean_data(df)
+    print(f"Cleaned dataset shape: {cleaned.shape}")
+    print(f"Rows removed as outliers: {len(df) - len(cleaned)}")
 
-    print(f"Cleaned dataset shape: {df.shape}")
+    # Missing values that the pipeline will fill.
+    print("\nMissing values per column (filled later by the imputer):")
+    print(cleaned.isna().sum()[cleaned.isna().sum() > 0])
 
-    # Separate features and target.
-    X, y = split_features_target(df)
+    # Create the stratified train-test split.
+    X_train, X_test, y_train, y_test = get_data()
 
-    # Create a stratified 80/20 train-test split.
-    # Stratification ensures that the proportion of loan_status
-    # classes remains approximately the same in both datasets.
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.20,
-        random_state=42,
-        stratify=y,
-    )
-
-    # Create the preprocessing pipeline using the training features.
-    preprocessor = create_preprocessor(X_train)
-
-    # Print the resulting shapes so we can verify everything works.
-    print(f"Train features shape: {X_train.shape}")
+    print(f"\nTrain features shape: {X_train.shape}")
     print(f"Test features shape: {X_test.shape}")
-    print(f"Train target shape: {y_train.shape}")
-    print(f"Test target shape: {y_test.shape}")
+    print(f"Default rate - train: {y_train.mean():.3f} | test: {y_test.mean():.3f}")
 
-    # Print the preprocessing pipeline.
+    # Create the preprocessing pipeline.
+    preprocessor = build_preprocessor()
+
+    # Fit on training data only, to show the final number of model inputs.
+    X_train_processed = preprocessor.fit_transform(X_train)
+    print(f"Processed train shape (after one-hot encoding): {X_train_processed.shape}")
+
     print("\nPreprocessing pipeline:")
     print(preprocessor)
 
