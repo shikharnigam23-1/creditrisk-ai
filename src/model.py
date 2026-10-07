@@ -241,6 +241,61 @@ def run_cv():
 
     plt.close(fig)
 
+# ========== T5: tune XGBoost, evaluate on the untouched test set, save ==========
+def run_tune():
+    X_train, X_test, y_train, y_test = get_data()
+    ratio = imbalance_ratio(y_train)
+    search_space = {
+        "model__n_estimators": [200, 300, 500, 700],    # number of trees
+        "model__max_depth": [3, 4, 5, 6, 8],            # how deep each tree can grow
+        "model__learning_rate": [0.01, 0.03, 0.05, 0.1, 0.2],  # size of each correction step
+        "model__subsample": [0.6, 0.8, 1.0],            # % of rows each tree sees
+        "model__colsample_bytree": [0.6, 0.8, 1.0],     # % of features each tree sees
+        "model__min_child_weight": [1, 3, 5],           # min data needed to split
+        "model__scale_pos_weight": [1.0, ratio],        # extra weight on defaults
+    }
+    base = make_pipeline(XGBClassifier(eval_metric="logloss", n_jobs=1, random_state=SEED))
+    search = RandomizedSearchCV(base, search_space, n_iter=25, scoring="roc_auc",
+                                cv=CV, n_jobs=-1, random_state=SEED, verbose=1)
+    search.fit(X_train, y_train)
+    best = search.best_estimator_
+    print(f"\nBest CV ROC-AUC: {search.best_score_:.4f}")
+    print("Best parameters:", search.best_params_)
+
+    # Final exam: the 20% test set the model has never seen
+    proba = best.predict_proba(X_test)[:, 1]
+    pred = (proba >= 0.5).astype(int)
+    results = {
+        "cv_best_roc_auc": round(search.best_score_, 4),
+        "best_params": {k.replace("model__", ""): v for k, v in search.best_params_.items()},
+        "test_roc_auc": round(roc_auc_score(y_test, proba), 4),
+        "test_precision_at_0.5": round(precision_score(y_test, pred), 4),
+        "test_recall_at_0.5": round(recall_score(y_test, pred), 4),
+        "test_f1_at_0.5": round(f1_score(y_test, pred), 4),
+    }
+    (REPORTS / "test_metrics.json").write_text(json.dumps(results, indent=2, default=float))
+    joblib.dump(best, MODEL_PATH)
+    print(json.dumps(results, indent=2, default=float))
+
+    # Charts for the slides
+    fig, ax = plt.subplots(figsize=(5, 5))
+    RocCurveDisplay.from_predictions(y_test, proba, ax=ax, name="XGBoost (tuned)")
+    ax.plot([0, 1], [0, 1], "--", color="grey")
+    fig.savefig(REPORTS / "roc_curve.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(5, 4))
+    ConfusionMatrixDisplay.from_predictions(y_test, pred, display_labels=["Repaid", "Default"],
+                                            cmap="Blues", ax=ax)
+    fig.savefig(REPORTS / "confusion_matrix.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    # Error analysis: how do MISSED defaulters differ from CAUGHT ones?
+    y = y_test.to_numpy()
+    missed = X_test[(y == 1) & (pred == 0)].mean(numeric_only=True)
+    caught = X_test[(y == 1) & (pred == 1)].mean(numeric_only=True)
+    pd.DataFrame({"missed_defaulters": missed, "caught_defaulters": caught}).round(2) \
+        .to_csv(REPORTS / "error_analysis.csv")
 
 # =========================================================
 # RUN
