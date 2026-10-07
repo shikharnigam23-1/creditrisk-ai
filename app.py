@@ -158,13 +158,100 @@ def show_what_if(applicant, proba):
 # ===== END T9 SECTION =====
 
 
-# ===== T10 SECTION (replace this whole section in T10) =====
+# ===== T10 SECTION =====
+GEMINI_MODEL = "gemini-2.5-flash"  # check aistudio.google.com for the latest Flash model name
+
+
+def _get_api_key():
+    try:
+        return st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        return os.environ.get("GEMINI_API_KEY")
+
+
+def _template_letter(decision, reasons):
+    """Backup letter if the AI service is unavailable: the demo never breaks."""
+    factors = "\n".join(f"  - {FRIENDLY.get(r['feature'], r['feature'])}: {fmt(r['feature'], r['value'])}"
+                        for r in reasons[:3])
+    if decision == "APPROVE":
+        body = "We are pleased to inform you that your loan application has been approved."
+    elif decision == "REVIEW":
+        body = ("Your application needs a short additional review by our credit team. "
+                "We may contact you for income or employment documents.")
+    else:
+        body = "After careful assessment, we are unable to approve your application at this time."
+    return (f"Dear Applicant,\n\n{body}\n\nThe main factors considered were:\n{factors}\n\n"
+            "Reducing the loan amount relative to your income and maintaining a clean repayment "
+            "record can improve future outcomes.\n\nRegards,\nCredit Team, CreditRisk AI")
+
+
 def show_letter(applicant, proba, decision, reasons):
-    st.info("AI decision letter coming in T10.")
+    st.subheader("✍️ AI decision letter")
+    if not st.button("Generate letter for the applicant"):
+        return
+    reason_text = "\n".join(f"- {FRIENDLY.get(r['feature'], r['feature'])} = {fmt(r['feature'], r['value'])} "
+                            f"({r['effect']})" for r in reasons[:3])
+    prompt = (
+        "You are a credit officer at an Indian NBFC. Write a short, polite, plain-English letter "
+        "(max 150 words) to a loan applicant.\n"
+        f"Decision: {decision}.\n"
+        f"Main factors behind the decision:\n{reason_text}\n"
+        "If the decision is REJECT or REVIEW, explain the factors simply and suggest 1-2 concrete "
+        "steps to improve. Do not mention models, SHAP or probabilities. "
+        "Sign off as 'Credit Team, CreditRisk AI'."
+    )
+    letter, source = None, "standard template"
+    key = _get_api_key()
+    if key:
+        try:
+            from google import genai
+            client = genai.Client(api_key=key)
+            with st.spinner("Writing letter with Gemini..."):
+                letter = client.models.generate_content(model=GEMINI_MODEL, contents=prompt).text
+            source = f"Gemini ({GEMINI_MODEL})"
+        except Exception as e:
+            st.warning(f"AI service unavailable ({type(e).__name__}), so the standard template was used.")
+    if not letter:
+        letter = _template_letter(decision, reasons)
+    st.text_area("Letter (editable)", letter, height=280)
+    st.caption(f"Written by: {source}. A human credit officer reviews every letter before it is sent.")
 
 
 def show_roi():
-    st.info("Portfolio ROI dashboard coming in T10.")
+    st.subheader("📈 Business impact (measured on unseen test loans)")
+    if not roi:
+        st.warning("Run `python -m src.model roi` first to create reports/roi.json.")
+        return
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Loss if we approve everyone", f"${roi['cost_approve_everyone']:,}")
+    c2.metric("Loss with CreditRisk AI", f"${roi['cost_creditrisk_ai']:,}",
+              delta=f"-${roi['saving_vs_approve_everyone']:,}", delta_color="inverse")
+    c3.metric("Extra saving vs simple grade rule", f"${roi['saving_vs_grade_rule']:,}")
+    a = roi["assumptions"]
+    st.caption(f"{roi['test_loans']:,} test loans · loss given default {a['loss_given_default']:.0%} · "
+               f"cost of funds {a['cost_of_funds']:.0%} · threshold {roi['optimal_threshold']}")
+
+    st.markdown("#### Scale it to your portfolio")
+    apps = st.number_input("Loan applications per year", 1000, 10_000_000, 50_000, step=1000)
+    st.success(f"Estimated annual saving: **${roi['saving_per_1000_applications'] * apps / 1000:,.0f}**")
+
+    bands_path = REPORTS / "decision_bands.csv"
+    if bands_path.exists():
+        st.markdown("#### How the decision bands perform")
+        st.dataframe(pd.read_csv(bands_path), hide_index=True)
+
+    st.markdown("#### Model evidence")
+    charts = [("cv_comparison.png", "Model comparison (5-fold CV)"),
+              ("threshold_cost_curve.png", "Cost-optimal threshold"),
+              ("roc_curve.png", "ROC curve (test set)"),
+              ("confusion_matrix.png", "Confusion matrix (test set)"),
+              ("shap_summary.png", "What drives risk overall (SHAP)")]
+    cols = st.columns(2)
+    for i, (file, caption) in enumerate(charts):
+        path = REPORTS / file
+        if path.exists():
+            cols[i % 2].image(str(path), caption=caption)
 # ===== END T10 SECTION =====
 
 
