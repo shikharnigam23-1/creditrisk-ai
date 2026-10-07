@@ -1,0 +1,4 @@
+band,applicants,actual_default_rate,share_of_applicants
+APPROVE,1598,0.006,0.245
+REJECT,1688,0.702,0.259
+REVIEW,3229,0.07,0.496

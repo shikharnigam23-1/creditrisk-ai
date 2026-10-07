@@ -297,6 +297,87 @@ def run_tune():
     pd.DataFrame({"missed_defaulters": missed, "caught_defaulters": caught}).round(2) \
         .to_csv(REPORTS / "error_analysis.csv")
 
+    # ========== T6: cost-based threshold + business ROI ==========
+LGD = 0.60            # assumption: lender loses 60% of the loan when a borrower defaults
+COST_OF_FUNDS = 0.07  # assumption: lender's own borrowing cost; profit = interest rate - this
+
+
+def _costs(X):
+    loan = X["loan_amnt"].to_numpy(dtype=float)
+    rate = X["loan_int_rate"].fillna(X["loan_int_rate"].median()).to_numpy(dtype=float) / 100
+    loss_if_default = loan * LGD
+    profit_if_repaid = loan * np.clip(rate - COST_OF_FUNDS, 0.01, None)
+    return loss_if_default, profit_if_repaid
+
+
+def _portfolio_cost(y, proba, threshold, loss, profit):
+    """Approve if risk < threshold.
+    Cost = money lost on approved defaulters + profit lost on rejected good customers."""
+    y = np.asarray(y)
+    approve = proba < threshold
+    return loss[approve & (y == 1)].sum() + profit[~approve & (y == 0)].sum()
+
+
+def run_roi():
+    X_train, X_test, y_train, y_test = get_data()
+    model = joblib.load(MODEL_PATH)
+    thresholds = np.round(np.arange(0.05, 0.96, 0.01), 2)
+
+    # 1) Choose the threshold on TRAINING data (out-of-fold predictions), never on the test set
+    oof = cross_val_predict(model, X_train, y_train, cv=CV, method="predict_proba")[:, 1]
+    loss_tr, profit_tr = _costs(X_train)
+    train_costs = [_portfolio_cost(y_train, oof, t, loss_tr, profit_tr) for t in thresholds]
+    best_t = float(thresholds[int(np.argmin(train_costs))])
+
+    # 2) Measure the business result on the untouched TEST set
+    proba = model.predict_proba(X_test)[:, 1]
+    loss, profit = _costs(X_test)
+    y = y_test.to_numpy()
+    cost_model = _portfolio_cost(y, proba, best_t, loss, profit)
+    cost_approve_all = _portfolio_cost(y, proba, 1.01, loss, profit)
+    rule_reject = X_test["loan_grade"].isin(["D", "E", "F", "G"]).to_numpy()  # simple human rule
+    cost_rule = loss[~rule_reject & (y == 1)].sum() + profit[rule_reject & (y == 0)].sum()
+
+    # 3) Three decision bands around the optimal threshold
+    approve_below = round(max(best_t - 0.10, 0.02), 2)
+    reject_above = round(min(best_t + 0.10, 0.98), 2)
+    bands = np.where(proba < approve_below, "APPROVE",
+                     np.where(proba >= reject_above, "REJECT", "REVIEW"))
+    band_table = pd.DataFrame({"band": bands, "default": y}).groupby("band")["default"] \
+        .agg(applicants="size", actual_default_rate="mean")
+    band_table["share_of_applicants"] = (band_table["applicants"] / len(y)).round(3)
+    band_table.round(3).to_csv(REPORTS / "decision_bands.csv")
+
+    n = len(y)
+    roi = {
+        "assumptions": {"loss_given_default": LGD, "cost_of_funds": COST_OF_FUNDS,
+                        "currency": "dataset units (USD) - convert to INR for slides"},
+        "optimal_threshold": best_t,
+        "bands": {"approve_below": approve_below, "reject_above": reject_above},
+        "test_loans": n,
+        "cost_approve_everyone": round(float(cost_approve_all)),
+        "cost_simple_grade_rule": round(float(cost_rule)),
+        "cost_creditrisk_ai": round(float(cost_model)),
+        "saving_vs_approve_everyone": round(float(cost_approve_all - cost_model)),
+        "saving_vs_grade_rule": round(float(cost_rule - cost_model)),
+        "saving_per_1000_applications": round(float((cost_approve_all - cost_model) / n * 1000)),
+    }
+    (REPORTS / "roi.json").write_text(json.dumps(roi, indent=2))
+    print(json.dumps(roi, indent=2))
+    print("\n", band_table)
+
+    # Chart: total cost at every threshold
+    test_costs = [_portfolio_cost(y, proba, t, loss, profit) for t in thresholds]
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(thresholds, np.array(test_costs) / 1e6, color="#2563eb")
+    ax.axvline(best_t, linestyle="--", color="red", label=f"chosen threshold = {best_t}")
+    ax.set_xlabel("Risk threshold (approve if below)")
+    ax.set_ylabel("Total cost (millions)")
+    ax.set_title("Picking the threshold that minimises business cost")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(REPORTS / "threshold_cost_curve.png", dpi=150)
+    plt.close(fig)
 # =========================================================
 # RUN
 # =========================================================
