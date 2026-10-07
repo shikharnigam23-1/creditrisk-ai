@@ -378,6 +378,81 @@ def run_roi():
     fig.tight_layout()
     fig.savefig(REPORTS / "threshold_cost_curve.png", dpi=150)
     plt.close(fig)
+
+    # ========== T7: explainability (SHAP) ==========
+def _readable(name):
+    """'num__loan_percent_income' -> 'loan percent income'"""
+    return name.split("__", 1)[-1].replace("_", " ")
+
+
+def _transform(pipe, X):
+    prep = pipe.named_steps["prep"]
+    Xt = prep.transform(X)
+    if hasattr(Xt, "toarray"):
+        Xt = Xt.toarray()
+    names = [_readable(n) for n in prep.get_feature_names_out()]
+    return pd.DataFrame(Xt, columns=names, index=X.index)
+
+
+def _original_feature_map(prep):
+    """Map each one-hot column (e.g. 'cat__loan_grade_D') back to its original feature ('loan_grade')."""
+    originals = [c for _, _, cols in prep.transformers_ if not isinstance(cols, str)
+                 for c in cols if isinstance(c, str)]
+    mapping = []
+    for name in prep.get_feature_names_out():
+        short = name.split("__", 1)[-1]
+        matches = [c for c in originals if short == c or short.startswith(c + "_")]
+        mapping.append(max(matches, key=len) if matches else short)
+    return mapping
+
+
+def explain(applicant, pipe=None, top_n=3):
+    """Top reasons for ONE applicant (a 1-row DataFrame of raw inputs). Used by app.py.
+    Positive impact = pushes default risk UP."""
+    import xgboost as xgb
+    pipe = pipe or joblib.load(MODEL_PATH)
+    prep, model = pipe.named_steps["prep"], pipe.named_steps["model"]
+    Xt = prep.transform(applicant)
+    if hasattr(Xt, "toarray"):
+        Xt = Xt.toarray()
+    booster = model.get_booster()
+    dm = xgb.DMatrix(np.asarray(Xt, dtype=float), feature_names=booster.feature_names)
+    contribs = booster.predict(dm, pred_contribs=True)[0][:-1]  # last value = baseline
+    per_feature = pd.Series(contribs, index=_original_feature_map(prep)).groupby(level=0).sum()
+    top = per_feature.reindex(per_feature.abs().sort_values(ascending=False).index)[:top_n]
+    row = applicant.iloc[0]
+    return [{"feature": f, "value": row.get(f), "impact": round(float(v), 3),
+             "effect": "raises risk" if v > 0 else "lowers risk"} for f, v in top.items()]
+
+
+def run_shap():
+    import shap
+    X_train, X_test, y_train, y_test = get_data()
+    pipe = joblib.load(MODEL_PATH)
+    sample = X_test.sample(min(1000, len(X_test)), random_state=SEED)
+    Xt = _transform(pipe, sample)
+    explainer = shap.TreeExplainer(pipe.named_steps["model"])
+    sv = explainer(Xt)
+
+    plt.figure()
+    shap.plots.beeswarm(sv, max_display=12, show=False)
+    plt.savefig(REPORTS / "shap_summary.png", dpi=150, bbox_inches="tight")
+    plt.close("all")
+
+    plt.figure()
+    shap.plots.bar(sv, max_display=12, show=False)
+    plt.savefig(REPORTS / "shap_importance.png", dpi=150, bbox_inches="tight")
+    plt.close("all")
+
+    i = int(np.argmax(pipe.predict_proba(sample)[:, 1]))  # riskiest applicant in the sample
+    plt.figure()
+    shap.plots.waterfall(sv[i], max_display=10, show=False)
+    plt.savefig(REPORTS / "shap_example_applicant.png", dpi=150, bbox_inches="tight")
+    plt.close("all")
+
+    print("Top reasons for the riskiest sample applicant:")
+    for r in explain(sample.iloc[[i]], pipe):
+        print("  ", r)
 # =========================================================
 # RUN
 # =========================================================
