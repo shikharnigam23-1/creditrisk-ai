@@ -1,0 +1,4 @@
+model,roc_auc_mean,roc_auc_std,precision_mean,precision_std,recall_mean,recall_std,f1_mean,f1_std
+XGBoost,0.9481,0.0046,0.8191,0.0089,0.8014,0.0136,0.8101,0.0073
+Random Forest,0.9317,0.0051,0.9742,0.0048,0.7151,0.0101,0.8247,0.0061
+Logistic Regression,0.8722,0.0049,0.5506,0.0126,0.7766,0.0097,0.6442,0.0071
