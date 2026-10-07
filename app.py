@@ -103,14 +103,58 @@ def fmt(feature, value):
     return str(value).title()
 
 
-# ===== T9 SECTION (replace this whole section in T9) =====
+# ===== T9 SECTION =====
 def show_reasons(applicant):
-    st.info("Reasons for the decision will appear here (T9).")
-    return []
+    """Top drivers of THIS applicant's risk, using SHAP values from explain() in model.py."""
+    st.subheader("Why this decision? (top drivers, from SHAP)")
+    reasons = explain(applicant, model, top_n=5)
+
+    for r in reasons[:3]:
+        name = FRIENDLY.get(r["feature"], r["feature"])
+        icon = "🔺" if r["impact"] > 0 else "🟢"
+        st.markdown(f"{icon} **{name}** = `{fmt(r['feature'], r['value'])}` → {r['effect']}")
+
+    labels = [FRIENDLY.get(r["feature"], r["feature"]) for r in reasons][::-1]
+    impacts = [r["impact"] for r in reasons][::-1]
+    fig, ax = plt.subplots(figsize=(6, 2.8))
+    ax.barh(labels, impacts, color=["#dc2626" if v > 0 else "#16a34a" for v in impacts])
+    ax.axvline(0, color="grey", lw=0.8)
+    ax.set_xlabel("Impact on default risk   ← lowers | raises →")
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+    st.caption("SHAP splits the prediction fairly among the features (Shapley values from game theory). "
+               "Red pushes risk up, green pushes it down.")
+    return reasons
 
 
 def show_what_if(applicant, proba):
-    st.info("What-if simulator coming in T9.")
+    """Change loan terms and see risk + decision update live."""
+    st.subheader("🎛️ What-if simulator")
+    st.caption("Try a smaller loan, a higher income or a different rate: how does the decision change?")
+    base = applicant.iloc[0]
+    tag = f"{base.loan_amnt}_{base.person_income}_{base.loan_int_rate}"  # resets sliders for a new applicant
+
+    c1, c2, c3 = st.columns(3)
+    new_amount = c1.slider("Loan amount ($)", 500, int(max(base.loan_amnt * 2, 1000)),
+                           int(base.loan_amnt), step=500, key=f"wi_amt_{tag}")
+    new_income = c2.slider("Annual income ($)", 5000, int(max(base.person_income * 2, 10000)),
+                           int(base.person_income), step=1000, key=f"wi_inc_{tag}")
+    new_rate = c3.slider("Interest rate (%)", 5.0, 25.0, float(base.loan_int_rate),
+                         step=0.5, key=f"wi_rate_{tag}")
+
+    what_if = applicant.copy()
+    what_if["loan_amnt"] = new_amount
+    what_if["person_income"] = new_income
+    what_if["loan_int_rate"] = new_rate
+    what_if["loan_percent_income"] = round(new_amount / new_income, 2)
+
+    new_p = predict(what_if)
+    new_decision, new_colour = decide(new_p)
+    m1, m2 = st.columns(2)
+    m1.metric("New probability of default", f"{new_p:.1%}",
+              delta=f"{(new_p - proba) * 100:+.1f} pts", delta_color="inverse")
+    m2.markdown(f"### New decision: :{new_colour}[**{new_decision}**]")
 # ===== END T9 SECTION =====
 
 
