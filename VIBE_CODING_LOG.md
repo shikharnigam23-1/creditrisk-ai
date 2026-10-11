@@ -2,7 +2,7 @@
 
 *Course: Data Science for Managers using Python, IIM Bodh Gaya*
 *Repository: `creditrisk-ai` (GitHub remote `origin`, branch `main`)*
-*Evidence used: project files, the generated `reports/` folder, and the Git history (13 commits on 7 October 2026). Anything that could not be checked against these is marked "Not available in the supplied project history."*
+*Evidence used: project files, the generated `reports/` folder, and the Git history (13 commits on 7 October 2026). Anything that could not be checked against these is marked "Not available in the supplied project history."* 
 
 ---
 
